@@ -51,7 +51,14 @@
     :any
     :float
     :var
-    :ilookup})
+    :ilookup
+    :delay
+    :promise
+    :future
+    :lazy-seq
+    :array
+    :class
+    :ipending})
 
 (def built-in-specs
   {'clojure.core clojure-core
@@ -80,10 +87,14 @@
    :transducer #{:ifn :fn}
    :list #{:seq :sequential :seqable :coll :stack}
    :seq #{:seqable :sequential :coll}
+   :lazy-seq #{:seq :seqable :sequential :coll :ipending}
    :sequential #{:coll :seqable}
    :sorted-map #{:map :seqable :associative :coll :ifn :ilookup}
    :atom #{:ideref}
-   :var #{:ideref :ifn}})
+   :var #{:ideref :ifn}
+   :delay #{:ideref :ipending}
+   :promise #{:ideref :ipending}
+   :future #{:ideref :ipending}})
 
 (def could-be-relations
   {:char-sequence #{:string}
@@ -103,11 +114,12 @@
    :stack #{:list :vector :seq :sequential :seqable :coll :ifn :associative :ilookup}
    :sequential #{:seq :list :vector :ifn :associative :stack :ilookup}
    :map #{:sorted-map}
-   :ideref #{:atom :var :ifn}
+   :ideref #{:atom :var :delay :promise :future :ifn}
+   :ipending #{:delay :promise :future :lazy-seq}
    :ilookup #{:map :set :sorted-map :coll :seqable :ifn :associative :vector
               :sequential :stack}})
 
-(def misc-types #{:boolean :atom :regex :char})
+(def misc-types #{:boolean :atom :regex :char :delay :promise :future :lazy-seq :array :class})
 
 (defn nilable? [k]
   (= "nilable" (namespace k)))
@@ -154,7 +166,14 @@
    :throwable "throwable"
    :sorted-map "sorted map"
    :var "var"
-   :ilookup "ILookup"})
+   :ilookup "ILookup"
+   :delay "delay"
+   :promise "promise"
+   :future "future"
+   :lazy-seq "lazy seq"
+   :ipending "IPending"
+   :array "array"
+   :class "class"})
 
 (defn label [k]
   (cond

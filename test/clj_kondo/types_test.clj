@@ -5,6 +5,17 @@
    [clojure.string :as str]
    [clojure.test :as t :refer [deftest is testing]]))
 
+(defn- ret-boolean-check [f config]
+  (assert-submaps2
+   '({:file "<stdin>"
+      :row 1
+      :col 6
+      :level :error
+      :message "Expected: number, received: boolean."})
+   (lint! (format "(inc %s)"
+                  f)
+          config)))
+
 (deftest type-mismatch-test
   (assert-submaps
    '({:row 1,
@@ -60,7 +71,7 @@
       :row 2,
       :col 28,
       :level :error,
-      :message "Expected: set or nil, received: seq."}
+      :message "Expected: set or nil, received: lazy seq."}
      {:file "<stdin>",
       :row 3,
       :col 28,
@@ -90,7 +101,7 @@
       :row 1,
       :col 9,
       :level :error,
-      :message "Expected: vector, received: seq."})
+      :message "Expected: vector, received: lazy seq."})
    (lint! "(subvec (map inc [1 2 3]) 10 20)"
           {:linters {:type-mismatch {:level :error}}}))
   (assert-submaps
@@ -358,7 +369,7 @@
           {:linters {:type-mismatch {:level :error}}}))
   (assert-submaps
    '({:file "<stdin>", :row 1, :col 12, :level :error,
-      :message "Expected: associative collection or string or set, received: seq."})
+      :message "Expected: associative collection or string or set, received: lazy seq."})
    (lint! "(contains? (map inc [1 2 3]) 1)"
           {:linters {:type-mismatch {:level :error}}}))
   (testing "resolve types via cache"
@@ -584,8 +595,7 @@
      :col 6,
      :level :error,
      :message "Expected: number, received: nil."}]
-   (lint! "(inc (or))" {:linters {:type-mismatch {:level :error}}})
-   ))
+   (lint! "(inc (or))" {:linters {:type-mismatch {:level :error}}})))
 
 (deftest cond-test
   (assert-submaps
@@ -787,7 +797,7 @@
 (deftest rseq-test
   (assert-submaps
    '({:file "<stdin>", :row 1, :col 7, :level :error,
-      :message "Expected: vector or sorted map, received: seq."})
+      :message "Expected: vector or sorted map, received: lazy seq."})
    (lint! "(rseq (map inc [1 2 3]))"
           {:linters {:type-mismatch {:level :error}}}))
   (is (empty? (lint! "(rseq (sorted-map :a 1)) (rseq [1 2 3])"
@@ -1055,7 +1065,7 @@
            lints))))
     (testing "override with config"
       (let [lints (lint! "(ns foo) (def x) (inc x)"
-                         (assoc-in config [:linters :type-mismatch :namespaces] '{foo {x {:type :keyword}}} ))]
+                         (assoc-in config [:linters :type-mismatch :namespaces] '{foo {x {:type :keyword}}}))]
         (assert-submaps
          '({:file "<stdin>", :row 1, :col 23, :level :error, :message "Expected: number, received: keyword."})
          lints)))))
@@ -1166,8 +1176,306 @@
        '({:row 1 :col 13 :message "Expected: function, received: positive integer."})
        (lint! "(repeatedly 10)" config)))))
 
+(deftest special-forms-test
+  (testing "quote returns any type"
+    (is (empty? (lint! "(inc (if true 1 (quote foo)))" config))))
+  (testing "var returns var type"
+    (is (empty? (lint! "(map #'inc [1 2 3])" config)))
+    (is (empty? (lint! "((partial #'+ 1) 2)" config)))
+    (is (empty? (lint! "(symbol #'inc)" config))))
+  (testing "fn returns function type"
+    (is (empty? (lint! "((fn [x] (inc x)) 1)" config)))
+    (is (empty? (lint! "(map (fn [x] (inc x)) [1 2 3])" config)))
+    (is (assert-submaps2
+         '({:file "<stdin>", :row 1, :col 6, :level :error, :message "Expected: number, received: function."})
+         (lint! "(inc (fn [x] (inc x)))" config)))
+    (testing "monitor-enter and monitor-exit return nil"
+      (is (empty? (lint! "(let [x (Object.)] (monitor-enter x) (monitor-exit x))" config))))))
+
+(deftest new-core-types-test
+  (testing "to-array returns array"
+    (is (empty? (lint! "(to-array [1 2 3])" config))))
+
+  (testing "cast with class and value"
+    (is (empty? (lint! "(cast String \"foo\")" config))))
+
+  (testing "gensym returns symbol"
+    (is (empty? (lint! "(symbol (gensym))" config)))
+    (is (empty? (lint! "(symbol (gensym \"prefix\"))" config)))
+    (assert-submaps2
+     '({:file "<stdin>", :row 1, :col 6, :level :error, :message "Expected: number, received: symbol."})
+     (lint! "(inc (gensym))" config)))
+
+  (testing "find-keyword returns nilable keyword"
+    (is (empty? (lint! "(keyword (find-keyword \"foo\"))" config)))
+    (is (empty? (lint! "(keyword (find-keyword \"ns\" \"name\"))" config))))
+
+  (testing "vary-meta returns same type as input"
+    (is (empty? (lint! "(inc (vary-meta 1 assoc :foo :bar))" config)))
+    (assert-submaps2
+     '({:file "<stdin>", :row 1, :col 6, :level :error, :message "Expected: number, received: string."})
+     (lint! "(inc (vary-meta \"foo\" assoc :bar :baz))" config)))
+
+  (testing "delay returns delay type"
+    (is (empty? (lint! "(delay? (delay 1))" config)))
+    (is (empty? (lint! "(delay? (delay (println \"computing\") 1))" config)))
+    (assert-submaps2
+     '({:file "<stdin>", :row 1, :col 6, :level :error, :message "Expected: number, received: delay."})
+     (lint! "(inc (delay 1))" config)))
+
+  (testing "force takes delay and returns any"
+    (is (empty? (lint! "(force (delay 1))" config)))
+    (is (empty? (lint! "(force (delay (println \"computing\") 42))" config)))
+    (is (empty? (lint! "(inc (force (delay 1)))" config))))
+
+  (testing "disj returns nilable set"
+    (is (empty? (lint! "(disj #{1 2 3} 1)" config)))
+    (is (empty? (lint! "(disj nil 1)" config))))
+
+  (testing "key and val return any"
+    (is (empty? (lint! "(key (first {}))" config)))
+    (is (empty? (lint! "(val (first {}))" config))))
+
+  (testing "name returns string"
+    (is (empty? (lint! "(subs (name :foo) 0 1)" config)))
+    (is (empty? (lint! "(subs (name 'bar) 0 1)" config)))
+    (assert-submaps2
+     '({:file "<stdin>", :row 1, :col 6, :level :error, :message "Expected: number, received: string."})
+     (lint! "(inc (name :foo))" config)))
+
+  (testing "char returns char"
+    (is (empty? (lint! "(char 97)" config)))
+    (is (empty? (lint! "(char \\a)" config)))
+    (assert-submaps2
+     '({:file "<stdin>", :row 1, :col 6, :level :error, :message "Expected: number, received: character."})
+     (lint! "(inc (char 97))" config)))
+
+  (testing "mod returns nat-int"
+    (is (empty? (lint! "(inc (mod 10 3))" config)))
+    (assert-submaps2
+     '({:file "<stdin>", :row 1, :col 11, :level :error, :message "Expected: integer, received: string."})
+     (lint! "(inc (mod \"foo\" 3))" config))
+    (assert-submaps2
+     '({:file "<stdin>", :row 1, :col 14, :level :error, :message "Expected: integer, received: string."})
+     (lint! "(inc (mod 10 \"bar\"))" config))
+    (assert-submaps2
+     '({:file "<stdin>", :row 1, :col 7, :level :error, :message "Expected: string, received: natural integer."})
+     (lint! "(subs (mod 10 3) 0 1)" config)))
+
+  (testing "numerator and denominator return int"
+    (is (empty? (lint! "(inc (numerator 1/2))" config)))
+    (is (empty? (lint! "(inc (denominator 1/2))" config))))
+
+  (testing "var-get returns any from var"
+    (is (empty? (lint! "(var-get #'inc)" config))))
+
+  (testing "var-set returns any"
+    (is (empty? (lint! "(var-set #'*foo* 42)" config))))
+
+  (testing "ex-data returns nilable map"
+    (is (empty? (lint! "(get (ex-data (Exception.)) :foo)" config))))
+
+  (testing "ex-message returns nilable string"
+    (is (empty? (lint! "(subs (ex-message (Exception.)) 0 1)" config))))
+
+  (testing "ex-cause returns nilable throwable"
+    (is (empty? (lint! "(throw (ex-cause (Exception.)))" config))))
+
+  (testing "rand returns number"
+    (is (empty? (lint! "(inc (rand))" config)))
+    (is (empty? (lint! "(inc (rand 10))" config)))
+    (assert-submaps2
+     '({:file "<stdin>", :row 1, :col 12, :level :error, :message "Expected: number, received: string."})
+     (lint! "(inc (rand \"foo\"))" config)))
+
+  (testing "rand-int returns int"
+    (is (empty? (lint! "(inc (rand-int 10))" config)))
+    (assert-submaps2
+     '({:file "<stdin>", :row 1, :col 16, :level :error, :message "Expected: integer, received: string."})
+     (lint! "(inc (rand-int \"foo\"))" config)))
+
+  (testing "hash returns int"
+    (is (empty? (lint! "(inc (hash {:a 1}))" config)))
+    (assert-submaps2
+     '({:file "<stdin>", :row 1, :col 7, :level :error, :message "Expected: string, received: integer."})
+     (lint! "(subs (hash {:a 1}) 0 1)" config)))
+
+  (testing "mix-collection-hash returns int"
+    (is (empty? (lint! "(inc (mix-collection-hash 1 2))" config))))
+
+  (testing "hash-ordered-coll returns int"
+    (is (empty? (lint! "(inc (hash-ordered-coll [1 2 3]))" config))))
+
+  (testing "hash-unordered-coll returns int"
+    (is (empty? (lint! "(inc (hash-unordered-coll #{1 2 3}))" config))))
+
+  (testing "empty returns coll"
+    (is (empty? (lint! "(conj (empty [1 2 3]) 4)" config)))
+    (is (empty? (lint! "(assoc (empty {:a 1}) :b 2)" config))))
+
+  (testing "not-empty returns nilable coll"
+    (is (empty? (lint! "(conj (not-empty [1 2 3]) 4)" config))))
+
+  (testing "bases returns nilable seq"
+    (is (empty? (lint! "(first (bases String))" config))))
+
+  (testing "supers returns nilable set"
+    (is (empty? (lint! "(first (supers String))" config))))
+
+  (testing "isa? returns boolean"
+    (is (empty? (lint! "(if (isa? String Object) 1 2)" config)))
+    (is (empty? (lint! "(if (isa? (make-hierarchy) :a :b) 1 2)" config)))
+    (ret-boolean-check "(isa? String Object)" config))
+
+  (testing "distinct? returns boolean"
+    (is (empty? (lint! "(if (distinct? 1 2 3) :yes :no)" config)))
+    (ret-boolean-check "(distinct? 1 nil 3)" config))
+
+  (testing "rand-nth returns any"
+    (is (empty? (lint! "(rand-nth [1 2 3])" config)))
+    (is (empty? (lint! "(inc (rand-nth [1 2 3]))" config))))
+
+  (testing "realized?"
+    (testing "returns boolean"
+      (is (empty? (lint! "(if (realized? (delay 1)) :yes :no)" config)))
+      (ret-boolean-check "(realized? (delay 1))" config))
+    (testing "takes IPending or lazy-seq"
+      (assert-submaps2
+       '({:file "<stdin>"
+          :row 1
+          :col 12
+          :level :error
+          :message "Expected: lazy seq or IPending, received: positive integer."})
+       (lint! "(realized? 2)" config))
+      (is (empty? (lint! "(realized? (map prn (range 20)))" config)))
+      (is (empty? (lint! "(realized? (promise))" config)))
+      (is (empty? (lint! "(realized? (future (+ 1 2)))" config)))))
+
+  (testing "promise returns promise type"
+    (is (empty? (lint! "(promise? (promise))" config)))
+    (assert-submaps2
+     '({:file "<stdin>", :row 1, :col 6, :level :error, :message "Expected: number, received: promise."})
+     (lint! "(inc (promise))" config)))
+
+  (testing "deliver takes promise and returns promise"
+    (is (empty? (lint! "(deliver (promise) 42)" config)))
+    (is (empty? (lint! "(promise? (deliver (promise) 42))" config)))
+    (assert-submaps2
+     '({:file "<stdin>", :row 1, :col 10, :level :error, :message "Expected: promise, received: positive integer."})
+     (lint! "(deliver 42 1)" config)))
+
+  (testing "future returns future type"
+    (is (empty? (lint! "(future? (future (+ 1 2)))" config)))
+    (is (empty? (lint! "(future? (future (println \"computing\") 42))" config)))
+    (assert-submaps2
+     '({:file "<stdin>"
+        :row 1
+        :col 6
+        :level :error
+        :message "Expected: number, received: future."})
+     (lint! "(inc (future 1))" config)))
+
+  (testing "lazy-seq returns lazy-seq type"
+    (is (empty? (lint! "(seq? (lazy-seq [1 2 3]))" config)))
+    (assert-submaps2
+     '({:file "<stdin>"
+        :row 1
+        :col 6
+        :level :error
+        :message "Expected: number, received: lazy seq."})
+     (lint! "(inc (lazy-seq [1 2 3]))" config))
+    (is (empty? (lint! "(realized? (lazy-seq [1 2 3]))" config))))
+
+  (testing "map returns lazy-seq"
+    (is (empty? (lint! "(seq? (map inc [1 2 3]))" config)))
+    (is (empty? (lint! "(realized? (map + [1 2 3] [1 2 3]))" config)))
+    (assert-submaps2
+     '({:file "<stdin>"
+        :row 1
+        :col 6
+        :level :error
+        :message "Expected: number, received: lazy seq."})
+     (lint! "(inc (map inc [1 2 3]))" config)))
+
+  (testing "interpose returns lazy-seq"
+    (is (empty? (lint! "(seq? (interpose \",\" [1 2 3]))" config)))
+    (is (empty? (lint! "(realized? (interpose \",\" [1 2 3]))" config)))
+    (assert-submaps2
+     '({:file "<stdin>"
+        :row 1
+        :col 6
+        :level :error
+        :message "Expected: number, received: lazy seq."})
+     (lint! "(inc (interpose \",\" [1 2 3]))" config)))
+
+  (testing "interpose returns transducer when called with 1 arg"
+    (is (empty? (lint! "(transduce (interpose \",\") str [1 2 3])" config)))
+    (assert-submaps2
+     '({:file "<stdin>"
+        :row 1
+        :col 6
+        :level :error
+        :message "Expected: number, received: transducer."})
+     (lint! "(inc (interpose \",\"))" config)))
+
+  (testing "transduce returns any"
+    (is (empty? (lint! "(transduce (map inc) + [1 2 3])" config)))
+    (is (empty? (lint! "(transduce (filter even?) conj [] [1 2 3 4])" config)))
+    (is (empty? (lint! "(transduce (take 2) conj [] [1 2 3 4])" config)))
+    (is (empty? (lint! "(transduce (map inc) + 0 [1 2 3])" config)))
+    (is (empty? (lint! "(inc (transduce (map inc) + [1 2 3]))" config)))
+    (assert-submaps2
+     '({:file "<stdin>"
+        :row 1
+        :col 12
+        :level :error
+        :message "Expected: transducer, received: positive integer."})
+     (lint! "(transduce 1 + [1 2 3])" config))
+    (assert-submaps2
+     '({:file "<stdin>"
+        :row 1
+        :col 22
+        :level :error
+        :message "Expected: function, received: positive integer."})
+     (lint! "(transduce (map inc) 1 [1 2 3])" config))
+    (assert-submaps2
+     '({:file "<stdin>"
+        :row 1
+        :col 24
+        :level :error
+        :message "Expected: seqable collection, received: positive integer."})
+     (lint! "(transduce (map inc) + 1)" config)))
+
+  (testing "range "
+    (testing "return lazy-seq with no args"
+      (is (empty? (lint! "(seq? (range))" config)))
+      (is (empty? (lint! "(realized? (range))" config))))
+    (testing "returns seq with args"
+      (is (empty? (lint! "(seq? (range 10))" config)))
+      (is (empty? (lint! "(seq? (range 1 10))" config)))
+      (is (empty? (lint! "(seq? (range 1 10 2))" config)))
+      (assert-submaps2
+       '({:file "<stdin>"
+          :row 1
+          :col 6
+          :level :error
+          :message "Expected: number, received: seq."})
+       (lint! "(inc (range 5))" config))
+      (assert-submaps2
+       '({:file "<stdin>"
+          :row 1
+          :col 12
+          :level :error
+          :message "Expected: lazy seq or IPending, received: seq."})
+       (lint! "(realized? (range 10))" config)))))
+
 ;;;; Scratch
 
 (comment
-
-  )
+  (assert-submaps2
+   '({:file "<stdin>"
+      :row 1
+      :col 12
+      :level :error
+      :message "Expected: number, received: boolean."})
+   (lint! "(inc (distinct? 1 nil 3))" config)))
