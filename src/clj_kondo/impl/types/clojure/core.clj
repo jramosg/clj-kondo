@@ -23,6 +23,9 @@
 
 (def any->boolean {:arities {1 {:ret :boolean}}})
 
+(def ratio->number {:arities {1 {:args [:ratio]
+                                 :ret :number}}})
+
 
 ;; arity-1 function that returns the same type
 (def a->a {:arities {1 {:args [:any]}}
@@ -153,9 +156,14 @@
    'hash-set {:arities {:varargs {:ret :set}}}
    ;; 398
    'sorted-map {:arities {:varargs {:ret :sorted-map}}}
-   ;; 407 'sorted-map-by
-   ;; 417 'sorted-set
-   ;; 425 'sorted-set-by
+   ;; 407 
+   'sorted-map-by {:arities {:varargs {:args [:ifn {:op :rest :spec [:any :any]}]
+                                       :ret :sorted-map}}}
+   ;; 417 
+   'sorted-set {:arities {:varargs {:ret :set}}}
+   ;; 425 
+   'sorted-set-by {:arities {:varargs {:args [:ifn {:op :rest :spec :any}]
+                                       :ret :set}}}
    ;; 436
    'nil? any->boolean
    ;; 444 'defmacro
@@ -204,7 +212,10 @@
                          :ret :symbol}
                       2 {:args [:nilable/string :string]
                          :ret :symbol}}}
-   ;; 604 'gensym
+   ;; 604 
+   'gensym {:arities {0 {:ret :symbol}
+                      1 {:args [#{:string :symbol}]
+                         :ret :symbol}}}
    ;; 614 'keyword
    'keyword {:arities {1 {:args [#{:symbol :string :keyword}]
                           :ret :keyword}
@@ -685,11 +696,15 @@
    ;; 3552 'unchecked-double
    ;; 3559
    'number? any->boolean
-   ;; 3566 'mod
+   ;; 3566 
+   'mod {:arities {2 {:args [:int :int]
+                      :ret :nat-int}}}
    ;; 3576
    'ratio? any->boolean
-   ;; 3582 'numerator
-   ;; 3590 'denominator
+   ;; 3582 
+   'numerator ratio->number
+   ;; 3590 
+   'denominator ratio->number
    ;; 3598
    'decimal? any->boolean
    ;; 3604
