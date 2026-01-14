@@ -124,6 +124,28 @@
       (when-let [f (:analyze-expression** ctx)]
         (f ctx m)))))
 
+(defn lint-fully-qualified-symbol [ctx expr sym resolved-ns]
+  (when (and expr resolved-ns
+  
+             (not (utils/linter-disabled? ctx :fully-qualified-symbol)))
+    (let [ns (:ns ctx)
+          ns-sym (symbol (namespace sym))]
+      (when (= ns-sym resolved-ns)
+        (let [qualify-ns (:qualify-ns ns)]
+          (when (contains? qualify-ns ns-sym)
+            (let [alias (some (fn [[alias-sym aliased-ns]]
+                                (when (= aliased-ns resolved-ns)
+                                  alias-sym))
+                              (:aliases ns))]
+              (findings/reg-finding!
+               ctx
+               (utils/node->line (:filename ctx)
+                                 expr
+                                 :fully-qualified-symbol
+                                 (if alias
+                                   (format "Use alias %s for %s" alias resolved-ns)
+                                   (format "Use alias for %s" resolved-ns)))))))))))
+
 (defn analyze-usages2
   ([ctx expr] (analyze-usages2 ctx expr {}))
   ([ctx expr {:keys [quote? syntax-quote?] :as opts}]
@@ -229,6 +251,9 @@
                        (namespace/reg-used-namespace! ctx
                                                       ns-name
                                                       resolved-ns)
+                       (when (and (not simple?)
+                                  (not syntax-quote?))
+                         (lint-fully-qualified-symbol ctx expr symbol-val resolved-ns))
                        (when (:analyze-var-usages? ctx)
                          (let [usage {:type :use
                                       :name (with-meta

@@ -122,6 +122,7 @@
               :missing-body-in-when {:level :warning}
               :hook {:level :error}
               :format {:level :error}
+              :fully-qualified-symbol {:level :info}
               :shadowed-var {:level :off
                              #_#_:suggestions {clojure.core/type tajpu
                                                clojure.core/name nomspaco}

@@ -500,8 +500,9 @@
                        (not (utils/linter-disabled? call :redundant-nested-call))
                        (lint-redundant-nested-call call))]]
       (namespace/lint-discouraged-var! ctx (:config call) resolved-ns call-fn-name filename row end-row col end-col fn-sym {:varargs-min-arity varargs-min-arity
-                                                                                                                       :fixed-arities fixed-arities
-                                                                                                                       :arity arity} (:expr call))
+                                                                                                                            :fixed-arities fixed-arities
+                                                                                                                            :arity arity} 
+                                       (:expr call))
       (when (and (not call?)
                  (identical? :fn (:type called-fn)))
         (when (:condition call)

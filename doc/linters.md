@@ -49,6 +49,7 @@ configuration. For general configurations options, go [here](config.md).
     - [Equals false](#equals-false)
     - [Equals nil](#equals-nil)
     - [Equals true](#equals-true)
+    - [Fully qualified symbol](#fully-qualified-symbol)
     - [File](#file)
     - [Format](#format)
     - [Def + fn instead of defn](#def--fn-instead-of-defn)
@@ -903,7 +904,32 @@ e.g. `(= 0.1 x)`. In many cases this can lead to issues due to rounding errors.
 
 *Example message:* `Prefer (true? x) over (= true x)`.
 
-### File
+### Fully qualified symbol
+
+*Keyword:* `:fully-qualified-symbol`.
+
+*Description:* warn when a fully qualified symbol is used for a namespace that has been required, suggesting to use an alias instead.
+
+*Default level:* `:off`.
+
+*Example trigger:*
+
+```clojure
+(ns foo
+  (:require [clojure.string :as str]))
+
+(clojure.string/join ", " (range 10))
+```
+
+*Example message:* `Use alias str for clojure.string`.
+
+*Config:* This linter can be enabled by setting the level to `:warning` or `:error`:
+
+```clojure
+{:linters {:fully-qualified-symbol {:level :warning}}}
+```
+
+### Format
 
 *Keyword:* `:file`.
 

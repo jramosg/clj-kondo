@@ -3353,31 +3353,38 @@
                           (types/add-arg-type-from-expr ctx expr))
                         ret))
                   (if-let [full-fn-name (utils/symbol-from-token function)]
-                    (let [simple? (simple-symbol? full-fn-name)
-                          full-fn-name (if simple?
-                                         (namespace/normalize-sym-name ctx full-fn-name)
-                                         full-fn-name)
-                          full-fn-name (with-meta full-fn-name (meta function))
-                          binding (and simple?
-                                       (get bindings full-fn-name))]
-                      (if binding
-                        (if-let [ret-tag (:ret (analyze-binding-call ctx full-fn-name binding expr))]
-                          (types/add-arg-type-from-expr ctx expr ret-tag)
-                          (types/add-arg-type-from-expr ctx expr))
-                        (let [id (or (:id expr) (gensym))
-                              expr (assoc expr :id id)
-                              ret (analyze-call ctx {:arg-count arg-count
-                                                     :full-fn-name full-fn-name
-                                                     :row row
-                                                     :col col
-                                                     :expr expr})
-                              _ (dorun ret) ;; realize all returned expressions
-                              ;; to not be bitten by laziness
-                              maybe-call (some #(when (= id (:id %)) %) ret)]
-                          (if (identical? :call (:type maybe-call))
-                            (types/add-arg-type-from-call ctx maybe-call expr)
+                    (do
+                      (when (qualified-symbol? full-fn-name)
+                        (let [resolved (namespace/resolve-name
+                                        ctx false (-> ctx :ns :name)
+                                        full-fn-name function)]
+                          (usages/lint-fully-qualified-symbol
+                           ctx function full-fn-name (:ns resolved))))
+                      (let [simple? (simple-symbol? full-fn-name)
+                            full-fn-name (if simple?
+                                           (namespace/normalize-sym-name ctx full-fn-name)
+                                           full-fn-name)
+                            full-fn-name (with-meta full-fn-name (meta function))
+                            binding (and simple?
+                                         (get bindings full-fn-name))]
+                        (if binding
+                          (if-let [ret-tag (:ret (analyze-binding-call ctx full-fn-name binding expr))]
+                            (types/add-arg-type-from-expr ctx expr ret-tag)
                             (types/add-arg-type-from-expr ctx expr))
-                          ret)))
+                          (let [id (or (:id expr) (gensym))
+                                expr (assoc expr :id id)
+                                ret (analyze-call ctx {:arg-count arg-count
+                                                       :full-fn-name full-fn-name
+                                                       :row row
+                                                       :col col
+                                                       :expr expr})
+                                _ (dorun ret) ;; realize all returned expressions
+                                ;; to not be bitten by laziness
+                                maybe-call (some #(when (= id (:id %)) %) ret)]
+                            (if (identical? :call (:type maybe-call))
+                              (types/add-arg-type-from-call ctx maybe-call expr)
+                              (types/add-arg-type-from-expr ctx expr))
+                            ret))))
                     (cond
                       (utils/boolean-token? function)
                       (do (reg-not-a-function! ctx function "boolean")
