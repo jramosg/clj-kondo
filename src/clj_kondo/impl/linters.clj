@@ -168,19 +168,21 @@
       ([clojure.test is] [cljs.test is])
       (when (and
              (= 2 (:arity call))
-             (not (utils/linter-disabled? call :is-message-not-string))
+             (not (utils/linter-disabled? ctx :is-message-not-string))
              (not (:clj-kondo.impl/generated (:expr call))))
         (let [expr (:expr call)
               second-arg (-> expr :children (nth 2 nil))
               arg-meta (meta second-arg)
               literal-string? (or (:lines second-arg)
-                                  (= :multi-line (tag second-arg))) 
+                                  (= :multi-line (tag second-arg)))
+              literal-non-string? (and (not literal-string?)
+                                       (constant? second-arg))
               arg-type (when-let [types (some-> (:arg-types call) deref)]
                          (when (= 2 (count types))
                            (tu/resolve-arg-type idacs (second types))))
-            
               typed-string? (and arg-type (types/match? arg-type :string))]
-          (when-not (or literal-string? typed-string?)
+          (when (or (and literal-non-string? (not typed-string?))
+                    (and arg-type (not typed-string?) (not literal-string?)))
             (findings/reg-finding! ctx
                                    (merge (select-keys call [:filename])
                                           (select-keys arg-meta [:row :end-row :col :end-col])
