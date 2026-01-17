@@ -137,16 +137,16 @@
          ;; nested syntax quotes are treated as normal quoted expressions by clj-kondo
          syntax-quote-tag? (= :syntax-quote t)
          unquote-tag? (one-of t [:unquote :unquote-splicing])
-         new-syntax-quote-level (cond syntax-quote-tag? (inc syntax-quote-level)
-                                      :else syntax-quote-level)
-         ctx (cond-> ctx
-               (and syntax-quote-tag? (= 1 new-syntax-quote-level))
-               (assoc :syntax-quote-gensyms (atom #{})))
+         new-syntax-quote-level (if syntax-quote-tag?
+                                  (inc syntax-quote-level)
+                                  syntax-quote-level)
          syntax-quote? (or syntax-quote? syntax-quote-tag?)
-         ctx (assoc ctx :syntax-quote-level new-syntax-quote-level)
-         ctx (if syntax-quote-tag?
-               (update ctx :callstack #(cons [:syntax-quote] %))
-               ctx)]
+         ctx (cond-> (assoc ctx :syntax-quote-level new-syntax-quote-level)
+               syntax-quote-tag?
+               (update :callstack #(cons [:syntax-quote] %))
+
+               (and syntax-quote-tag? (= 1 new-syntax-quote-level))
+               (assoc :syntax-quote-gensyms (atom #{})))]
      (if (and (pos? syntax-quote-level) unquote-tag?)
        (common/analyze-expression** ctx expr)
        (if quote?
@@ -172,22 +172,24 @@
                                   symbol-val)
                      expr-meta (meta expr)
                      new-syntax-quote-level-pos? (pos? new-syntax-quote-level)
-                     auto-gensym? (and new-syntax-quote-level-pos? 
+                     auto-gensym? (and new-syntax-quote-level-pos?
                                        (str/ends-with? (str symbol-val) "#"))
                      _ (when auto-gensym?
-                         (let [syntax-quote-stack-depth
-                               (count (filter #(= :syntax-quote (first %))
-                                              (:callstack ctx)))
+                         (let [sq? #(= :syntax-quote (first %))
+                               syntax-quote-stack-depth (->> (:callstack ctx)
+                                                             (filter sq?)
+                                                             count)
                                unquote-level (- syntax-quote-stack-depth
                                                 (:syntax-quote-level ctx))]
                            (when (zero? unquote-level)
-                             (when-let [gensyms (:syntax-quote-gensyms ctx)]
-                               (swap! gensyms conj symbol-val)))))]
+                             (some-> (:syntax-quote-gensyms ctx)
+                                     (swap! conj symbol-val)))))
+                     syntax-quote-gensyms (some-> (:syntax-quote-gensyms ctx)
+                                                  deref)]
                  (if-let [b (when (and simple?
                                        (or (not new-syntax-quote-level-pos?)
                                            (and auto-gensym?
-                                                (contains? (some-> (:syntax-quote-gensyms ctx)
-                                                                   deref)
+                                                (contains? syntax-quote-gensyms
                                                            symbol-val))))
                               (or (get (:bindings ctx) symbol-val)
                                   (get (:bindings ctx)
@@ -273,8 +275,7 @@
                                       :unresolved-symbol-disabled?
                                       (or (and new-syntax-quote-level-pos? (not auto-gensym?))
                                           (and auto-gensym?
-                                               (when-let [gensyms (:syntax-quote-gensyms ctx)]
-                                                 (contains? @gensyms symbol-val)))
+                                               (contains? syntax-quote-gensyms symbol-val))
                                           ;; e.g. usage of clojure.core,
                                           ;; clojure.string, etc in (:require [...])
                                           (= symbol-val (get (:qualify-ns ns)
