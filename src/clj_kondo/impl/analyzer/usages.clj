@@ -139,6 +139,9 @@
          unquote-tag? (one-of t [:unquote :unquote-splicing])
          new-syntax-quote-level (cond syntax-quote-tag? (inc syntax-quote-level)
                                       :else syntax-quote-level)
+         ctx (cond-> ctx
+               (and syntax-quote-tag? (= 1 new-syntax-quote-level))
+               (assoc :syntax-quote-gensyms (atom #{})))
          syntax-quote? (or syntax-quote? syntax-quote-tag?)
          ctx (assoc ctx :syntax-quote-level new-syntax-quote-level)
          ctx (if syntax-quote-tag?
@@ -168,8 +171,24 @@
                                   (namespace/normalize-sym-name ctx symbol-val)
                                   symbol-val)
                      expr-meta (meta expr)
-                     new-syntax-quote-level-pos? (pos? new-syntax-quote-level)]
-                 (if-let [b (when (and simple? (not new-syntax-quote-level-pos?))
+                     new-syntax-quote-level-pos? (pos? new-syntax-quote-level)
+                     auto-gensym? (and new-syntax-quote-level-pos? 
+                                       (str/ends-with? (str symbol-val) "#"))
+                     _ (when auto-gensym?
+                         (let [syntax-quote-stack-depth
+                               (count (filter #(= :syntax-quote (first %))
+                                              (:callstack ctx)))
+                               unquote-level (- syntax-quote-stack-depth
+                                                (:syntax-quote-level ctx))]
+                           (when (zero? unquote-level)
+                             (when-let [gensyms (:syntax-quote-gensyms ctx)]
+                               (swap! gensyms conj symbol-val)))))]
+                 (if-let [b (when (and simple?
+                                       (or (not new-syntax-quote-level-pos?)
+                                           (and auto-gensym?
+                                                (contains? (some-> (:syntax-quote-gensyms ctx)
+                                                                   deref)
+                                                           symbol-val))))
                               (or (get (:bindings ctx) symbol-val)
                                   (get (:bindings ctx)
                                        (str/replace (str symbol-val) #"\**$" ""))))]
@@ -252,7 +271,10 @@
                                       :top-ns (:top-ns ctx)
                                       :filename (:filename ctx)
                                       :unresolved-symbol-disabled?
-                                      (or new-syntax-quote-level-pos?
+                                      (or (and new-syntax-quote-level-pos? (not auto-gensym?))
+                                          (and auto-gensym?
+                                               (when-let [gensyms (:syntax-quote-gensyms ctx)]
+                                                 (contains? @gensyms symbol-val)))
                                           ;; e.g. usage of clojure.core,
                                           ;; clojure.string, etc in (:require [...])
                                           (= symbol-val (get (:qualify-ns ns)

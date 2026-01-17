@@ -126,3 +126,24 @@ bar/x (bar/y)
               {:linters {:unresolved-symbol {:level :error}
                          :unresolved-var {:level :error}}}
               "--config-dir" (fs/file "corpus" "issue-2239" ".clj-kondo"))))
+
+(deftest issue-2747-test
+  (testing "Gensym bindings in nested syntax quotes should not cause unresolved symbol errors"
+    (is (empty? (lint! "(defmacro def-some-macro [] `(defmacro ~'some-macro [x#] `(list ~x#)))"
+                       {:linters {:unresolved-symbol {:level :error}}})))
+    (is (empty? (lint! "(defmacro outer [] `(defmacro ~'inner [a# b#] `(+ ~a# ~b#)))"
+                       {:linters {:unresolved-symbol {:level :error}}})))))
+
+(deftest nested-syntax-quote-gensym-test
+  (testing "bound gensym in nested syntax-quote"
+    (is (empty? (lint! "(defmacro m [] `(let [x# 1] `(inc ~x#)))"
+                       {:linters {:unresolved-symbol {:level :error}}}))))
+  (testing "unbound gensym in nested syntax-quote"
+    (assert-submaps
+     '({:file "<stdin>"
+        :row 1
+        :col 36
+        :level :error
+        :message "Unresolved symbol: y#"})
+     (lint! "(defmacro m [] `(let [x# 1] `(inc ~y#)))"
+            {:linters {:unresolved-symbol {:level :error}}}))))
