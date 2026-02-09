@@ -21,6 +21,7 @@ For a list of breaking changes, check [here](#breaking-changes).
 
 - Performance improvement: refactor `lint-cond-constants!` to eliminate `sexpr` usage ([@jramosg](https://github.com/jramosg))
 - [#2762](https://github.com/clj-kondo/clj-kondo/issues/2762): Fix false positive: `throw` with string in CLJS no longer warns about type mismatch ([@jramosg](https://github.com/jramosg))
+- [#2770](https://github.com/clj-kondo/clj-kondo/issues/2770): Fix: linter-specific `#_{:clj-kondo/ignore [:specific-linter]}` now correctly respects the specified linters instead of suppressing all linters for `:unused-excluded-var` and `:unresolved-excluded-var`
 
 
 ## 2026.01.19
