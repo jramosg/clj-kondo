@@ -543,6 +543,15 @@
     (is (empty? (lint! "(try nil (catch Exception & nil))")))))
 
 (deftest defaults-destructuring-test
+  (testing ":or accepts literal keys"
+    (is (empty? (lint! "(let [{:keys [& :rebilling :repeat]
+                                referralamount :amount
+                                :or {referralamount 0
+                                     :rebilling false
+                                     :repeat false}}
+                               {:amount 13}]
+                           [referralamount])"
+                       '{:linters {:unresolved-symbol {:level :error}}}))))
   (testing "CLJ-2966: :defaults binds a map of the applied :or defaults"
     (is (empty? (lint! "(let [{:keys [a] :or {a 1} :defaults ds} {}] [a ds])"
                        '{:linters {:unresolved-symbol {:level :error}}})))

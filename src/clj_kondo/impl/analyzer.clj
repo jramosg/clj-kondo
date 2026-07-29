@@ -93,7 +93,7 @@
       (doseq [[k _v] (partition 2 (:children defaults))
               :let [sym (:value k)
                     mta (meta k)]
-              :when sym]
+              :when (simple-symbol? sym)]
         (if-let [binding (get m sym)]
           (namespace/reg-destructuring-default! ctx mta binding)
           (findings/reg-finding!
@@ -109,8 +109,9 @@
     (doseq [[k v] (partition 2 (:children defaults))]
       (let [binding (:value k)
             simple? (and (identical? :token (tag k))
-                         (simple-symbol? binding))]
-        (when (:required (get m binding))
+                         (simple-symbol? binding))
+            literal-key? (types/static-map-key? ctx k)]
+        (when (and simple? (:required (get m binding)))
           (let [mta (meta k)]
             (findings/reg-finding!
              ctx
@@ -121,11 +122,11 @@
               :end-col (:end-col mta)
               :filename (:filename ctx)
               :type :syntax})))
-        (when-not simple?
+        (when-not (or simple? literal-key?)
           (let [m (meta k)]
             (findings/reg-finding!
              ctx
-             {:message "Keys in :or should be simple symbols."
+             {:message "Keys in :or should be simple symbols or literal keys."
               :row (:row m)
               :col (:col m)
               :end-row (:end-row m)
@@ -136,7 +137,9 @@
           ;; see #915
           (analyze-expression** prev-ctx v)
           (do
-            (when (and (:analyze-locals? ctx) (not (:clj-kondo/mark-used k)))
+            (when (and simple?
+                       (:analyze-locals? ctx)
+                       (not (:clj-kondo/mark-used k)))
               (let [expr-meta (meta k)
                     expr-meta (assoc-some expr-meta
                                           :name-row (:row expr-meta)

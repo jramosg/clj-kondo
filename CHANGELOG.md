@@ -11,6 +11,11 @@ For a list of breaking changes, check [here](#breaking-changes).
 <!-- - [ ] github release (publish the draft manually) -->
 <!-- - [ ] bb script/release-everything.clj -> homebrew, clj-kondo pod, clj-kondo-bb, lein-clj-kondo, post-release bump -->
 
+## Unreleased
+
+- Fix false positive syntax findings for literal keys in `:or` map
+  destructuring after `&` ([@jramosg](https://github.com/jramosg))
+
 ## 2026.07.24
 
 ### Highlights
