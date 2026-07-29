@@ -82,56 +82,127 @@
                      cat)
                children))))))
 
-(defn- destructuring-default-binding [ctx m key-bindings k]
-  (let [binding-name (:value k)
-        symbol? (and (identical? :token (tag k))
+(defn- static-map-key-entry [ctx expr]
+  (let [t (tag expr)]
+    (cond
+      (or (identical? :token t)
+          (identical? :quote t))
+      (when (types/static-map-key? ctx expr)
+        (let [map-key (types/map-key ctx expr)]
+          (when (types/known-map-key? map-key)
+            [map-key])))
+
+      (one-of t [:vector :set :map])
+      (let [entries (mapv #(static-map-key-entry ctx %)
+                          (:children expr))]
+        (when (every? some? entries)
+          [(case t
+             :vector (mapv first entries)
+             :set (set (map first entries))
+             :map (into {} (map (fn [[k v]]
+                                  [(first k) (first v)]))
+                        (partition 2 entries)))]))
+
+      :else nil)))
+
+(defn- default-map-key [ctx binding->key default-key]
+  (let [binding-name (:value default-key)
+        symbol? (and (identical? :token (tag default-key))
                      (symbol? binding-name))]
     (if symbol?
-      (get m binding-name)
-      (when (types/static-map-key? ctx k)
-        (let [map-key (types/map-key ctx k)]
-          (when (types/known-map-key? map-key)
-            (some (fn [[binding-key binding _defaulted?]]
-                    (when (= map-key binding-key)
-                      binding))
-                  key-bindings)))))))
+      (when-let [[_ map-key] (find binding->key binding-name)]
+        [map-key])
+      (static-map-key-entry ctx default-key))))
+
+(defn- destructuring-default-info [ctx m opts k]
+  (let [binding-name (:value k)
+        simple? (and (identical? :token (tag k))
+                     (simple-symbol? binding-name))
+        symbol? (and (identical? :token (tag k))
+                     (symbol? binding-name))
+        map-key-entry (default-map-key ctx (:binding->key opts) k)
+        map-key (first map-key-entry)
+        binding (if symbol?
+                  (when (or (not (:strict-or-keys? opts))
+                            map-key-entry)
+                    (get m binding-name))
+                  (some (fn [[binding-key binding _defaulted?]]
+                          (when (= map-key binding-key)
+                            binding))
+                        (:key-bindings opts)))]
+    {:binding-name binding-name
+     :simple? simple?
+     :symbol? symbol?
+     :known-map-key? (boolean map-key-entry)
+     :map-key map-key
+     :binding binding}))
 
 (defn analyze-keys-destructuring-defaults [ctx prev-ctx m defaults opts]
   #_(prn :anathefuck)
-  (let [key-bindings (:key-bindings opts)
+  (let [strict-or-keys? (:strict-or-keys? opts)
+        selected-keys (:selected-keys opts)
         mark-used? (or (:skip-reg-binding? ctx)
                        (:mark-bindings-used? ctx)
                        (when (:fn-args? opts)
                          (-> ctx :config :linters :unused-binding
                              :exclude-destructured-keys-in-fn-args)))]
-    (when-not mark-used?
-      (doseq [[k _v] (partition 2 (:children defaults))
-              :let [sym (:value k)
-                    simple? (and (identical? :token (tag k))
-                                 (simple-symbol? sym))
-                    binding (destructuring-default-binding
-                             ctx m key-bindings k)
-                    mta (meta k)]]
-        (if binding
-          (namespace/reg-destructuring-default! ctx mta binding)
-          (when simple?
+    (doseq [[k _v] (partition 2 (:children defaults))
+            :let [{:keys [binding-name simple? symbol? binding]}
+                  (destructuring-default-info ctx m opts k)
+                  mta (meta k)]]
+      (when (and binding (not mark-used?))
+        (namespace/reg-destructuring-default! ctx mta binding))
+      (when (and symbol? (not binding)
+                 (or strict-or-keys?
+                     (and simple? (not mark-used?))))
+        (findings/reg-finding!
+         ctx
+         (if strict-or-keys?
+           {:message (str "symbol " binding-name
+                          " in :or does not refer to a binding")
+            :row (:row mta)
+            :col (:col mta)
+            :end-row (:end-row mta)
+            :end-col (:end-col mta)
+            :filename (:filename ctx)
+            :type :syntax}
+           {:message (str binding-name
+                          " is not bound in this destructuring form")
+            :level :warning
+            :row (:row mta)
+            :col (:col mta)
+            :end-row (:end-row mta)
+            :end-col (:end-col mta)
+            :filename (:filename ctx)
+            :type :unbound-destructuring-default}))))
+    (when strict-or-keys?
+      (let [unreferenced
+            (into []
+                  (keep (fn [[k _v]]
+                          (let [{:keys [known-map-key? map-key]}
+                                (destructuring-default-info ctx m opts k)]
+                            (when (and known-map-key?
+                                       (not (contains? selected-keys map-key)))
+                              [k map-key]))))
+                  (partition 2 (:children defaults)))]
+        (when (seq unreferenced)
+          (let [mta (meta (ffirst unreferenced))]
             (findings/reg-finding!
              ctx
-             {:message (str sym " is not bound in this destructuring form") :level :warning
+             {:message (str "keys " (set (map second unreferenced))
+                            " appear only in :or")
               :row (:row mta)
               :col (:col mta)
               :end-row (:end-row mta)
               :end-col (:end-col mta)
               :filename (:filename ctx)
-              :type :unbound-destructuring-default}))))))
-  (let [undefined-locals (set (keys m))
-        key-bindings (:key-bindings opts)]
+              :type :syntax}))))))
+  (let [undefined-locals (set (keys m))]
     (doseq [[k v] (partition 2 (:children defaults))]
       (let [binding-name (:value k)
             simple? (and (identical? :token (tag k))
                          (simple-symbol? binding-name))
-            binding (destructuring-default-binding
-                     ctx m key-bindings k)]
+            binding (:binding (destructuring-default-info ctx m opts k))]
         (when (:required binding)
           (let [mta (meta k)]
             (findings/reg-finding!
@@ -270,18 +341,145 @@
   [ctx modifier-node modifier-type entries]
   (let [modifier-ns (:ns (usages/resolve-keyword ctx modifier-node (-> ctx :ns :name)))]
     (when-not (identical? :clj-kondo/unknown-namespace modifier-ns)
-      (into {}
-            (keep #(when-not (= '& (:value %))
-                     (when-let [k (destructuring-key ctx modifier-ns modifier-type %)]
-                       [k :any])))
-            entries))))
+      (loop [entries entries
+             amp? false
+             ret {}]
+        (if-let [entry (first entries)]
+          (if (= '& (:value entry))
+            (recur (next entries) true ret)
+            (let [map-key-entry
+                  (if amp?
+                    (static-map-key-entry ctx entry)
+                    (some-> (destructuring-key
+                             ctx modifier-ns modifier-type entry)
+                            vector))]
+              (recur (next entries) amp?
+                     (if map-key-entry
+                       (assoc ret (first map-key-entry) :any)
+                       ret))))
+          ret)))))
+
+(defn- destructuring-binding-keys
+  [ctx modifier-node modifier-type entries]
+  (let [modifier-ns (:ns (usages/resolve-keyword
+                          ctx modifier-node (-> ctx :ns :name)))]
+    (when-not (identical? :clj-kondo/unknown-namespace modifier-ns)
+      (loop [entries entries
+             amp? false
+             ret {}]
+        (if-let [entry (first entries)]
+          (cond
+            (= '& (:value entry))
+            (recur (next entries) true ret)
+
+            amp?
+            (recur (next entries) true ret)
+
+            :else
+            (let [binding-name
+                  (or (some-> (:value entry) name symbol)
+                      (some-> (:k entry) name symbol))
+                  map-key
+                  (destructuring-key
+                   ctx modifier-ns modifier-type entry)]
+              (recur (next entries) false
+                     (if (and binding-name map-key)
+                       (assoc ret binding-name map-key)
+                       ret))))
+          ret)))))
+
+(defn- map-destructuring-binding-keys [ctx expr]
+  (reduce
+   (fn [ret [binding-form key-expr]]
+     (let [key-name (some-> (:k binding-form) name keyword)]
+       (cond
+         (one-of key-name [:keys :syms :strs
+                           :keys! :syms! :strs!])
+         (merge ret
+                (destructuring-binding-keys
+                 ctx binding-form key-name (:children key-expr)))
+
+         (and (nil? key-name)
+              (utils/symbol-token? binding-form))
+         (let [map-key (types/map-key ctx key-expr)]
+           (if (types/known-map-key? map-key)
+             (assoc ret (:value binding-form) map-key)
+             ret))
+
+         :else ret)))
+   {}
+   (partition 2 (:children expr))))
+
+(defn- default-tag-entry [ctx expr]
+  (if-let [expr-tag (types/expr->tag ctx expr)]
+    {:tag expr-tag}
+    {}))
+
+(defn- destructured-all-tag [ctx expr form-tag]
+  (let [kvs (partition 2 (:children expr))
+        binding->key (map-destructuring-binding-keys ctx expr)
+        defaults (some (fn [[k v]]
+                         (when (and (= :or (:k k))
+                                    (not (:namespaced? k)))
+                           v))
+                       kvs)
+        map-tag? (identical? :map (:type form-tag))
+        closed-map? (and map-tag? (not (:open form-tag)))
+        nil-tag? (identical? :nil form-tag)
+        start-val (cond
+                    map-tag? (:val form-tag)
+                    nil-tag? {}
+                    :else nil)
+        with-defaults
+        (if (and defaults (or closed-map? nil-tag?))
+          (reduce
+           (fn [ret [default-key default-expr]]
+             (if-let [map-key-entry
+                      (default-map-key ctx binding->key default-key)]
+               (let [map-key (first map-key-entry)]
+                 (if (contains? ret map-key)
+                   ret
+                   (assoc ret map-key
+                          (default-tag-entry ctx default-expr))))
+               ret))
+           start-val
+           (partition 2 (:children defaults)))
+          start-val)
+        transformed
+        (when with-defaults
+          (reduce
+           (fn [ret [binding-form key-expr]]
+             (if (identical? :map (tag binding-form))
+               (let [map-key (types/map-key ctx key-expr)]
+                 (if (and (types/known-map-key? map-key)
+                          (or (contains? ret map-key)
+                              closed-map?
+                              nil-tag?))
+                   (let [entry (get ret map-key)
+                         child-form-tag (if (contains? ret map-key)
+                                          (:tag entry)
+                                          :nil)
+                         child-all-tag
+                         (destructured-all-tag
+                          ctx binding-form child-form-tag)]
+                     (assoc ret map-key
+                            (assoc (or entry {})
+                                   :tag child-all-tag)))
+                   ret))
+               ret))
+           with-defaults
+           kvs))]
+    (cond
+      map-tag? (assoc form-tag :val transformed)
+      nil-tag? {:type :map :val transformed}
+      :else {:type :map :val {} :open true})))
 
 (declare extract-bindings)
 
 (defn extract-map-bindings
   [ctx expr scoped-expr opts]
-  (let [;; in a namespaced map the reader qualifies :as, :or and :select,
-        ;; which Clojure rejects as map directives
+  (let [;; in a namespaced map the reader qualifies :as, :or, :select,
+        ;; :all and :defaults, which Clojure rejects as map directives
         plain-directive? (if (:namespaced-map opts)
                            (fn [_ _] false)
                            (fn [k kw] (and (= kw (:k k))
@@ -293,16 +491,31 @@
         ;; types/destructured-key-tag. :tag must not leak to children
         ;; wholesale
         form-tag (:tag opts)
-        opts (dissoc opts :allow-amp :namespaced-map :tag)
+        implicit-select? (:implicit-select? opts)
+        implicit-all? (:implicit-all? opts)
+        opts (dissoc opts :allow-amp :namespaced-map :tag
+                     :implicit-select? :implicit-all?)
         kvs (partition 2 (:children expr))
         select? (some (fn [[k _]] (plain-directive? k :select)) kvs)
+        all? (some (fn [[k _]] (plain-directive? k :all)) kvs)
+        select-context? (or select? implicit-select?)
+        all-context? (or all? implicit-all?)
+        defaults-as? (some (fn [[k _]]
+                             (plain-directive? k :defaults))
+                           kvs)
         or? (some (fn [[k _]] (plain-directive? k :or)) kvs)
+        strict-or-keys?
+        (and or? (or select-context? all-context? defaults-as?))
+        track-selected? (or select-context? strict-or-keys?)
+        binding->key (map-destructuring-binding-keys ctx expr)
+        all-tag (when all?
+                  (destructured-all-tag ctx expr form-tag))
         [req sel] (reduce (fn [[req sel] [k v]]
                             (let [key-name (some-> (:k k) name keyword)]
                               (cond (one-of key-name [:keys! :syms! :strs!])
                                     (let [ks (destructuring-keys ctx k key-name (:children v))]
                                       [(merge req ks) (merge sel ks)])
-                                    (not select?) [req sel]
+                                    (not track-selected?) [req sel]
                                     (one-of key-name [:keys :syms :strs])
                                     [req (merge sel (destructuring-keys ctx k key-name (:children v)))]
                                     ;; k is a binding form, v its lookup key
@@ -413,6 +626,9 @@
                                     (analyze-keys-destructuring-defaults
                                      ctx prev-ctx res v
                                      (assoc opts
+                                            :strict-or-keys? strict-or-keys?
+                                            :selected-keys (set (keys sel))
+                                            :binding->key binding->key
                                             :key-bindings @key-bindings))
                                     (recur rest-kvs res))
                                   :else
@@ -437,6 +653,18 @@
                                                          (assoc opts :tag {:type :map
                                                                            :val (update-vals sel (fn [t] {:tag t}))}))))
                                       (recur rest-kvs res))
+                            ;; Clojure 1.13: binds the input map with defaults
+                            ;; applied, including nested map destructuring
+                            :all (if (plain-directive? k :all)
+                                   (let [all-opts (if all-tag
+                                                    (assoc opts :tag all-tag)
+                                                    opts)]
+                                     (recur rest-kvs
+                                            (merge res
+                                                   (extract-bindings
+                                                    ctx v scoped-expr
+                                                    all-opts))))
+                                   (recur rest-kvs res))
                             ;; Clojure 1.13 CLJ-2966: binds a map of the applied :or defaults
                             :defaults (if (plain-directive? k :defaults)
                                         (do (when-not or?
@@ -451,11 +679,17 @@
                   ;; k is a binding form, v its lookup key
                   (let [mk (types/map-key ctx v)
                         known-key? (types/known-map-key? mk)
-                        child-opts (if-let [vt (when known-key?
-                                                 (types/destructured-key-tag
-                                                  form-tag mk (defaulted? (:value k) mk)))]
-                                     (assoc opts :tag vt)
-                                     opts)
+                        value-tag (when known-key?
+                                    (types/destructured-key-tag
+                                     form-tag mk (defaulted? (:value k) mk)))
+                        child-map? (identical? :map (tag k))
+                        child-opts
+                        (cond-> opts
+                          value-tag (assoc :tag value-tag)
+                          (and child-map? select-context?)
+                          (assoc :implicit-select? true)
+                          (and child-map? all-context?)
+                          (assoc :implicit-all? true))
                         bnds (extract-bindings ctx k scoped-expr child-opts)]
                     (when (and known-key? (utils/symbol-token? k))
                       (when-let [b (some-> bnds first val)]

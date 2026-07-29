@@ -579,6 +579,115 @@
      (lint! "(let [{:keys [a] :defaults ds} {}] [a ds])"
             '{:linters {:unresolved-symbol {:level :error}}}))))
 
+(deftest all-destructuring-test
+  (let [config '{:linters {:unresolved-symbol {:level :error}
+                           :unused-binding {:level :warning}}}]
+    (testing "Clojure 1.13 alpha6: :all binds the map with defaults"
+      (is (empty?
+           (lint! "(let [{:keys [& :rebilling :repeat]
+                          referralamount :amount
+                          :or {referralamount 0
+                               :rebilling false
+                               :repeat false}
+                          :all data}
+                         {:amount 13}]
+                     [referralamount
+                      (:rebilling data)
+                      (:repeat data)])"
+                  config))))
+    (testing ":all works through nested map destructuring"
+      (is (empty?
+           (lint! "(let [{{:keys [amount]
+                           :or {amount 0}
+                           :all child}
+                          :child
+                          :all data}
+                         {:child {:amount 13
+                                  :rebilling true}
+                          :other 42}]
+                     [amount child data])"
+                  config))))
+    (testing "unused :all binding"
+      (assert-submaps2
+       '({:file "<stdin>", :row 1, :col 23, :level :warning,
+          :message "unused binding data"})
+       (lint! "(let [{:keys [x] :all data} {:x 1}] x)" config)))
+    (testing "only the exact :all keyword is a directive"
+      (assert-submaps2
+       '({:file "<stdin>", :row 1, :level :error,
+          :message "Unresolved symbol: data1"}
+         {:file "<stdin>", :row 2, :level :error,
+          :message "Unresolved symbol: data2"}
+         {:file "<stdin>", :row 3, :level :error,
+          :message "Unresolved symbol: data3"})
+       (lint! "(let [{:person/all data1} {}] data1)
+(let [{::all data2} {}] data2)
+(let [#:person{:all data3} {}] data3)"
+              config)))))
+
+(deftest alpha6-strict-or-destructuring-test
+  (let [config '{:linters {:unresolved-symbol {:level :error}}}]
+    (testing "new directives reject :or symbols without bindings"
+      (doseq [[snippet binding]
+              [["(let [{:keys [x] :or {z 1} :all all} {}] [x all])" 'z]
+               ["(let [{:keys [x] :or {all 1} :all all} {}] [x all])"
+                'all]
+               ["(let [{:keys [x] :or {z 1} :select selected} {}]
+                   [x selected])"
+                'z]
+               ["(let [{:keys [x] :or {z 1} :defaults defaults} {}]
+                   [x defaults])"
+                'z]]]
+        (assert-submaps2
+         [{:file "<stdin>"
+           :level :error
+           :message (str "symbol " binding
+                         " in :or does not refer to a binding")}]
+         (lint! snippet config))))
+    (testing "new directives reject literal keys that appear only in :or"
+      (doseq [[snippet message]
+              [["(let [{:keys [& :rebilling]
+                        :or {:other false}
+                        :all data}
+                       {}]
+                   data)"
+                "keys #{:other} appear only in :or"]
+               ["(let [{:keys [& [:expected]]
+                        :or {[:other] false}
+                        :all data}
+                       {}]
+                   data)"
+                "keys #{[:other]} appear only in :or"]]]
+        (assert-submaps2
+         [{:file "<stdin>" :level :error :message message}]
+         (lint! snippet config))))
+    (testing "outer :all and :select validate nested :or entries"
+      (doseq [snippet ["(let [{{:keys [x] :or {z 1}} :child
+                              :all data}
+                             {}]
+                          data)"
+                       "(let [{{:keys [x] :or {z 1}} :child
+                              :select data}
+                             {}]
+                          data)"]]
+        (assert-submaps2
+         '({:file "<stdin>", :level :error,
+            :message "symbol z in :or does not refer to a binding"})
+         (lint! snippet config))))
+    (testing "literal defaults matching named keys are accepted"
+      (doseq [snippet
+              ["(let [{:keys [rebilling & :repeat]
+                       :or {:rebilling false :repeat false}
+                       :all data}
+                      {}]
+                  [rebilling data])"
+               "(let [{:keys [& [:expected]]
+                       :or {[:expected] false}
+                       :all data}
+                      {}]
+                  data)"]]
+        (is (empty? (lint! snippet config)))))))
+
 (deftest required-binding-default-test
   (testing ":or default for required binding is a compile error in Clojure 1.13"
     (doseq [snippet ["(let [{:keys! [x] :or {x 1}} {}] x)"

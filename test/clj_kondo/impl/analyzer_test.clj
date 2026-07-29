@@ -3,6 +3,7 @@
    [clj-kondo.impl.analyzer :as ana]
    [clj-kondo.impl.analyzer.namespace :refer [analyze-ns-decl]]
    [clj-kondo.impl.metadata :as meta]
+   [clj-kondo.impl.types :as types]
    [clj-kondo.impl.utils :refer [parse-string]]
    [clj-kondo.test-utils :refer [assert-submap]]
    [clojure.test :as t :refer [deftest testing is are]]))
@@ -90,6 +91,24 @@
     '[x foo] '[x {:keys [::foo]}]
     '[str-foo str-bar] "{:strs [str-foo str-bar]}"
     '[sym-foo sym-bar] "{:syms [sym-foo sym-bar]}"))
+
+(deftest destructured-all-tag-test
+  (testing "nested defaults are added to the outer :all map"
+    (is (= {:type :map
+            :val {:inner
+                  {:tag {:type :map
+                         :val {:x {:tag :string}}}}}}
+           (#'ana/destructured-all-tag
+            ctx
+            (parse-string "{{:keys [x] :or {x \"s\"}} :inner
+                           :all data}")
+            (types/map->tag ctx (parse-string "{}"))))))
+  (testing "nil input becomes an empty map"
+    (is (= {:type :map :val {}}
+           (#'ana/destructured-all-tag
+            ctx
+            (parse-string "{:all data}")
+            :nil)))))
 
 (deftest ->findings-test
   (testing "unexpected exceptions"

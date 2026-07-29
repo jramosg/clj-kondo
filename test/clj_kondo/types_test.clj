@@ -1826,6 +1826,46 @@
 (defn f3 [{:keys [c] :select m} k] [c (assoc m k 1)])"
                          config))))))
 
+(deftest all-destructuring-types-test
+  (let [config {:linters {:type-mismatch {:level :error}}}]
+    (testing ":all keeps the input map's value types"
+      (assert-submaps2
+       '({:row 1 :message "Expected: number, received: string."})
+       (lint! "(let [{:all m} {:x \"s\"}] (inc (:x m)))" config)))
+    (testing ":all includes defaults missing from a closed input map"
+      (assert-submaps2
+       '({:row 2 :message "Expected: number, received: string."})
+       (lint! "(let [{:keys [x] :or {:x \"s\"} :all m} {}]
+                 (inc (:x m)))"
+              config)))
+    (testing "input values override :all defaults"
+      (is (empty?
+           (lint! "(let [{:keys [x] :or {:x \"s\"} :all m} {:x 1}]
+                     (inc (:x m)))"
+                  config))))
+    (testing ":all applies defaults through nested destructuring"
+      (assert-submaps2
+       '({:row 5 :message "Expected: number, received: string."})
+       (lint! "(let [{{:keys [x] :or {x \"s\"} :all child}
+                       :inner
+                       :all m}
+                      {}]
+                 (inc (:x child)))"
+              config)))
+    (testing "an unknown input does not assume the default's type"
+      (is (empty?
+           (lint! "(defn f [input]
+                     (let [{:keys [x] :or {x \"s\"} :all m} input]
+                       (inc (:x m))))"
+                  config))))
+    (testing ":all is a map even when the input type is unknown"
+      (assert-submaps2
+       '({:row 3 :message "Expected: number, received: map."})
+       (lint! "(defn f [input]
+                 (let [{:all m} input]
+                   (inc m)))"
+              config)))))
+
 (deftest flow-narrowing-test
   (let [config {:linters {:type-mismatch {:level :error}}}]
     (testing "value is narrowed to the predicate's type in the then branch"

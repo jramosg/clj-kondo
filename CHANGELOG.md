@@ -13,6 +13,13 @@ For a list of breaking changes, check [here](#breaking-changes).
 
 ## Unreleased
 
+- [#2924](https://github.com/clj-kondo/clj-kondo/issues/2924):
+  support Clojure 1.13 alpha6 `:all` map destructuring and strict `:or`
+  validation, including
+  [CLJ-2972](https://clojure.atlassian.net/browse/CLJ-2972) validation for
+  unbound and unreferenced defaults
+  ([@jramosg](https://github.com/jramosg))
+
 - [#2925](https://github.com/clj-kondo/clj-kondo/issues/2925):
   support Clojure 1.13 alpha4 literal keys in map destructuring `:or`
   ([@jramosg](https://github.com/jramosg))
